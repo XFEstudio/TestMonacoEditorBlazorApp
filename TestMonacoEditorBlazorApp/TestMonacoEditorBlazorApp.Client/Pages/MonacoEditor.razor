@@ -1,0 +1,294 @@
+﻿@page "/editor"
+@inject IJSRuntime JS
+
+<PageTitle>Monaco编辑器</PageTitle>
+
+<h1>Monaco编辑器</h1>
+
+<StandaloneCodeEditor @ref="editor" ConstructionOptions="EditorConstructionOptions" OnDidInit="EditorDidInit" OnDidChangeCursorPosition="EditorDidChangeCursorPosition" CssClass="main-editor-class" />
+
+@code {
+    private StandaloneCodeEditor editor = new();
+    private string[] keyWords = [
+    "extern", "alias", "using", "bool", "decimal", "sbyte", "byte", "short",
+    "ushort", "int", "uint", "long", "ulong", "char", "float", "double",
+    "object", "dynamic", "string", "assembly", "is", "as", "ref",
+    "out", "this", "base", "new", "typeof", "void", "checked", "unchecked",
+    "default", "delegate", "var", "const", "if", "else", "switch", "case",
+    "while", "do", "for", "foreach", "in", "break", "continue", "goto",
+    "return", "throw", "try", "catch", "finally", "lock", "yield", "from",
+    "let", "where", "join", "on", "equals", "into", "orderby", "ascending",
+    "descending", "select", "group", "by", "namespace", "partial", "class",
+    "field", "event", "method", "param", "property", "public", "protected",
+    "internal", "private", "abstract", "sealed", "static", "struct", "readonly",
+    "volatile", "virtual", "override", "params", "get", "set", "add", "remove",
+    "operator", "true", "false", "implicit", "explicit", "interface", "enum",
+    "null", "async", "await", "fixed", "sizeof", "stackalloc", "unsafe", "nameof",
+    "when"
+    ];
+
+    private List<CompletionItem> innerCompletionItemList = [];
+    private List<CompletionItem> completionItemList = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await BlazorMonaco.Languages.Global.RegisterCompletionItemProvider(JS, new("csharp"), new((uri, position, context) =>
+        {
+            Console.WriteLine($"URL:{uri} Context:{context.TriggerCharacter}");
+            return new()
+                {
+                    Suggestions = innerCompletionItemList
+                };
+        })
+            {
+                TriggerCharacters = [".", "", " ", ","]
+            });
+        await BlazorMonaco.Languages.Global.RegisterCompletionItemProvider(JS, new("csharp"), new((uri, position, context) =>
+        {
+            Console.WriteLine($"URL:{uri} Context:{context.TriggerCharacter}");
+            return new()
+                {
+                    Suggestions = completionItemList
+                };
+        }));
+    }
+
+    private void EditorDidInit()
+    {
+
+    }
+
+    private async void EditorDidChangeCursorPosition(CursorPositionChangedEvent eventArgs)
+    {
+        Console.WriteLine($"Cursor position at: Line:{eventArgs.Position.LineNumber} Column:{eventArgs.Position.Column}\tSource:{eventArgs.Source}\tReason:{eventArgs.Reason}");
+        await AnaliseCode(eventArgs.Position.LineNumber, eventArgs.Position.Column);
+    }
+
+    private async Task AnaliseCode(int lineNumber, int columnNumber)
+    {
+        var code = await editor.GetValue();
+        SyntaxTree syntaxTree = CSharpSyntaxTree.ParseText(code);
+        var root = syntaxTree.GetRoot() as CompilationUnitSyntax;
+        if (root is null)
+            return;
+        var currentCompletionItemList = new List<CompletionItem>()
+        {
+            new()
+            {
+                LabelAsString = "cw",
+                Kind = CompletionItemKind.Snippet,
+                InsertText = @"Console.WriteLine(""${1:Text}"");",
+                InsertTextRules = CompletionItemInsertTextRule.InsertAsSnippet,
+                Detail = "快速插入Console.WriteLine语句"
+            },
+            new()
+            {
+                LabelAsString = "foreach",
+                Kind = CompletionItemKind.Snippet,
+                InsertText = @"foreach(var ${1:item} in ${2:collection})
+{
+    $0
+}",
+                InsertTextRules = CompletionItemInsertTextRule.InsertAsSnippet,
+                Detail = "快速插入foreach语句"
+            }
+        };
+
+        foreach (var keyWord in keyWords)
+        {
+            currentCompletionItemList.Add(new()
+                {
+                    LabelAsString = keyWord,
+                    Kind = CompletionItemKind.Keyword,
+                    InsertText = keyWord,
+                    Detail = $"关键字：{keyWord}"
+                });
+        }
+        var fileScopeNamespaceDeclaration = root.DescendantNodes().OfType<FileScopedNamespaceDeclarationSyntax>().FirstOrDefault();
+        if (fileScopeNamespaceDeclaration is null)
+        {
+            var namespaceDeclarations = root.DescendantNodes().OfType<NamespaceDeclarationSyntax>().ToList();
+            if (namespaceDeclarations is not null)
+            {
+                foreach (var namespaceDeclaration in namespaceDeclarations)
+                {
+                    var namespaceName = namespaceDeclaration.Name.ToString();
+                    var namespaceFullName = namespaceDeclaration.Name.ToFullString();
+                    if (!currentCompletionItemList.Any(item => item.LabelAsString == namespaceName))
+                        currentCompletionItemList.Add(new()
+                            {
+                                LabelAsString = namespaceName,
+                                Kind = CompletionItemKind.Reference,
+                                Detail = namespaceFullName,
+                                InsertText = namespaceName,
+                                DocumentationAsString = namespaceName
+                            });
+                }
+            }
+        }
+        else
+        {
+            var namespaceName = fileScopeNamespaceDeclaration.Name.ToString();
+            var namespaceFullName = fileScopeNamespaceDeclaration.Name.ToFullString();
+            if (!currentCompletionItemList.Any(item => item.LabelAsString == namespaceName))
+                currentCompletionItemList.Add(new()
+                    {
+                        LabelAsString = namespaceName,
+                        Kind = CompletionItemKind.Reference,
+                        Detail = namespaceFullName,
+                        InsertText = namespaceName,
+                        DocumentationAsString = namespaceName
+                    });
+        }
+        var classDeclarations = root.DescendantNodes().OfType<ClassDeclarationSyntax>().ToList();
+        if (classDeclarations is null)
+            return;
+        foreach (var classDeclaration in classDeclarations)
+        {
+            var className = classDeclaration.Identifier.ToString();
+            var fullClassName = classDeclaration.Identifier.ToFullString();
+            if (!currentCompletionItemList.Any(item => item.LabelAsString == className))
+                currentCompletionItemList.Add(new()
+                    {
+                        LabelAsString = className,
+                        Kind = CompletionItemKind.Class,
+                        Detail = fullClassName,
+                        InsertText = className,
+                        DocumentationAsString = fullClassName
+                    });
+            await BlazorMonaco.Editor.Global.Colorize(JS, className, "csharp", new());
+            var properties = classDeclaration.DescendantNodes().OfType<PropertyDeclarationSyntax>();
+            foreach (var property in properties)
+            {
+                string propertyName = property.Identifier.ToString();
+                if (!currentCompletionItemList.Any(item => item.LabelAsString == propertyName))
+                    currentCompletionItemList.Add(new()
+                        {
+                            LabelAsString = propertyName,
+                            Kind = CompletionItemKind.Property,
+                            Detail = propertyName,
+                            InsertText = propertyName,
+                            DocumentationAsString = propertyName
+                        });
+            }
+            var methods = classDeclaration.DescendantNodes().OfType<MethodDeclarationSyntax>();
+            foreach (var method in methods)
+            {
+                string methodName = method.Identifier.ToString();
+                if (!currentCompletionItemList.Any(item => item.LabelAsString == methodName))
+                    currentCompletionItemList.Add(new()
+                        {
+                            LabelAsString = methodName,
+                            Kind = CompletionItemKind.Method,
+                            Detail = methodName,
+                            InsertText = methodName,
+                            DocumentationAsString = methodName
+                        });
+            }
+            var fields = classDeclaration.DescendantNodes().OfType<FieldDeclarationSyntax>();
+            foreach (var field in fields)
+            {
+                foreach (var variable in field.Declaration.Variables)
+                {
+                    string fieldName = variable.Identifier.ToString();
+                    if (!currentCompletionItemList.Any(item => item.LabelAsString == fieldName))
+                        currentCompletionItemList.Add(new()
+                            {
+                                LabelAsString = fieldName,
+                                Kind = CompletionItemKind.Field,
+                                Detail = fieldName,
+                                InsertText = fieldName,
+                                DocumentationAsString = fieldName
+                            });
+                }
+            }
+        }
+        var node = root.FindToken(GetIndexFromLineColumn(code, lineNumber, columnNumber)).Parent;
+        while (node is not null)
+        {
+            if (node is ClassDeclarationSyntax)
+            {
+                Console.WriteLine("Position is inside a class.");
+                currentCompletionItemList.Where(item => new string[] { "stackalloc", "interface", "ref", "out", "in", "var" }.Any(keyWord => item.LabelAsString == keyWord)).ToList().ForEach(item => currentCompletionItemList.Remove(item));
+                break;
+            }
+            else if (node is FieldDeclarationSyntax)
+            {
+                Console.WriteLine("Position is inside a field.");
+                break;
+            }
+            else if (node is PropertyDeclarationSyntax)
+            {
+                Console.WriteLine("Position is inside a property.");
+                break;
+            }
+            else if (node is MethodDeclarationSyntax)
+            {
+                Console.WriteLine("Position is inside a method.");
+                break;
+            }
+            node = node.Parent;
+        }
+        if (node is null)
+        {
+            Console.WriteLine("Position is nothing");
+        }
+        innerCompletionItemList = currentCompletionItemList;
+        // completionItemList = currentCompletionItemList;
+        // innerCompletionItemList = currentCompletionItemList.Where(item => item.Kind == CompletionItemKind.Method || item.Kind == CompletionItemKind.Property || item.Kind == CompletionItemKind.Field).ToList();
+    }
+
+    private static int GetIndexFromLineColumn(string code, int lineNumber, int columnNumber)
+    {
+        int index = 0;
+
+        for (int i = 1; i < lineNumber; i++)
+        {
+            index = code.IndexOf("\r\n", index) + 1;
+            if (index == 0)
+            {
+                return -1;
+            }
+        }
+
+        index += columnNumber - 1;
+        Console.WriteLine(index);
+        return index;
+    }
+
+    private StandaloneEditorConstructionOptions EditorConstructionOptions(StandaloneCodeEditor editor)
+    {
+        BlazorMonaco.Editor.Global.DefineTheme(JS, "customTheme", new()
+            {
+                Base = "vs-dark",
+                Inherit = true,
+                Rules =
+                        [
+                            new() { Token = "keyword", Foreground = "ab1f9e", FontStyle = "blod" },
+                    new() { Token = "string", Foreground = "2f810f" },
+                    new() { Token = "number", Foreground = "2f810f"},
+                    new() { Token = "comment", Foreground = "5e5e5e", FontStyle = "italic" },
+                    new() { Token = "number.float", Foreground = "ab1f9e" }
+                        ],
+                Colors = new Dictionary<string, string>() { { "editor.background", "#1e1e1e" }, { "editor.foreground", "#d4d4d4" }, { "editor.lineHighlightBackground", "#2d2d2d" }, { "editorLineNumber.foreground", "#d4d4d4" }, { "editor.selectionBackground", "#3e3e3e" }, { "editor.wordHighlightBackground", "#303030" }, { "editorCursor.foreground", "#d4d4d4" }, },
+                EncodedTokensColors = ["#ab1f9e", "#2f810f", "#b5cea8", "#5e5e5e", "#ab1f9e"]
+            });
+        return new StandaloneEditorConstructionOptions
+            {
+                AutomaticLayout = true,
+                Theme = "customTheme",
+                Language = "csharp",
+                WordWrap = "on",
+                Value = @"namespace ConsoleApp;
+
+public class Program
+{
+    public static void Main(string[] args)
+    {
+        Console.WriteLine(""Hello World!"");
+    }
+}
+"
+            };
+    }
+}
